@@ -226,10 +226,13 @@ export {
   dispatchToolCall,
   createOpenAITools,
   createVercelAITools,
+  createAnthropicTools,
+  executeAnthropicToolUse,
   type BuyWhereToolArgs,
   type BuyWhereToolName,
   type OpenAIToolsIntegration,
   type VercelAITool,
+  type AnthropicTool,
 } from './adapters';
 
 export {

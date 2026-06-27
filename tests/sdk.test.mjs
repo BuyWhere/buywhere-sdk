@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { BuyWhereClient, BuyWhereError, createClient, createOpenAITools, createVercelAITools } from '../dist/index.js';
+import { BuyWhereClient, BuyWhereError, createClient, createOpenAITools, createVercelAITools, createAnthropicTools, executeAnthropicToolUse } from '../dist/index.js';
 
 test('SDK compare is callable and posts product ids', async () => {
   const originalFetch = globalThis.fetch;
@@ -305,6 +305,38 @@ test('createVercelAITools exposes 5 executable tools', async () => {
     assert.ok(tools.resolve_product_query.parameters.properties.query, 'query param present');
     const res = await tools.resolve_product_query.execute({ query: 'mechanical keyboard' });
     assert.equal(typeof res, 'object');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---- Adapters: createAnthropicTools ----
+test('createAnthropicTools returns 5 tools in Anthropic shape with input_schema', () => {
+  const sdk = createClient('bw_live_test');
+  const tools = createAnthropicTools(sdk);
+  assert.equal(tools.length, 5);
+  for (const t of tools) {
+    assert.ok(typeof t.name === 'string');
+    assert.ok(typeof t.description === 'string');
+    assert.ok(typeof t.input_schema === 'object');
+  }
+  assert.ok(tools.some(t => t.name === 'resolve_product_query'));
+});
+
+test('executeAnthropicToolUse dispatches resolve_product_query to agents search', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push({ url: String(url) });
+    return new Response(JSON.stringify({
+      results: [], total: 0, agent_results: [], query_time_ms: 1, cache_hit: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const sdk = createClient('bw_live_test');
+    await executeAnthropicToolUse(sdk, 'resolve_product_query', { query: 'running shoes' });
+    assert.ok(calls.some(c => c.url.includes('/v2/agents/search')), 'expected agents search URL');
   } finally {
     globalThis.fetch = originalFetch;
   }

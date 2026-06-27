@@ -199,3 +199,59 @@ export function createVercelAITools(sdk: BuyWhereSDK): Record<BuyWhereToolName, 
   }
   return tools as Record<BuyWhereToolName, VercelAITool>;
 }
+
+/**
+ * Anthropic Claude SDK integration.
+ *
+ * Returns tools in the shape consumed by the Anthropic Messages API `tools`
+ * parameter. Each tool has `name`, `description`, and `input_schema` (the
+ * JSON Schema the model uses to fill arguments).
+ *
+ * ```ts
+ * import Anthropic from '@anthropic-ai/sdk';
+ * import { createClient, createAnthropicTools } from '@buywhere/sdk';
+ *
+ * const sdk = createClient(process.env.BUYWHERE_API_KEY);
+ * const anthropic = new Anthropic();
+ * const tools = createAnthropicTools(sdk);
+ *
+ * const message = await anthropic.messages.create({
+ *   model: 'claude-sonnet-4-5',
+ *   tools,
+ *   messages: [{ role: 'user', content: 'Find the best price for wireless headphones' }],
+ * });
+ *
+ * for (const block of message.content) {
+ *   if (block.type === 'tool_use') {
+ *     const result = await dispatchToolCall(sdk, block.name, block.input as any);
+ *   }
+ * }
+ * ```
+ */
+export interface AnthropicTool {
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+}
+
+export function createAnthropicTools(sdk: BuyWhereSDK): AnthropicTool[] {
+  return OPENAI_TOOL_SCHEMAS.tools.map((def) => ({
+    name: def.function.name,
+    description: def.function.description ?? '',
+    input_schema: def.function.parameters as Record<string, unknown>,
+  }));
+}
+
+/**
+ * Execute an Anthropic tool_use block against the SDK.
+ *
+ * Convenience wrapper around `dispatchToolCall` for callers wiring the
+ * Anthropic Messages API.
+ */
+export async function executeAnthropicToolUse(
+  sdk: BuyWhereSDK,
+  name: string,
+  input: Record<string, unknown>,
+): Promise<unknown> {
+  return dispatchToolCall(sdk, name as BuyWhereToolName, input as BuyWhereToolArgs[BuyWhereToolName]);
+}
