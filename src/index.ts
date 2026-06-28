@@ -223,6 +223,19 @@ export type { CompareNamespace } from './compare';
 export type { GetProductAlertsParams, ProductAlert } from './types';
 
 export {
+  dispatchToolCall,
+  createOpenAITools,
+  createVercelAITools,
+  createAnthropicTools,
+  executeAnthropicToolUse,
+  type BuyWhereToolArgs,
+  type BuyWhereToolName,
+  type OpenAIToolsIntegration,
+  type VercelAITool,
+  type AnthropicTool,
+} from './adapters';
+
+export {
   validateSearchParams,
   validateCompareParams,
   validateDealsParams,

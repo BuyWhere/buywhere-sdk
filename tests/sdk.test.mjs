@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { BuyWhereClient, BuyWhereError, createClient } from '../dist/index.js';
+import { BuyWhereClient, BuyWhereError, createClient, createOpenAITools, createVercelAITools, createAnthropicTools, executeAnthropicToolUse } from '../dist/index.js';
 
 test('SDK compare is callable and posts product ids', async () => {
   const originalFetch = globalThis.fetch;
@@ -252,6 +252,91 @@ test('products client can get alerts for a product', async () => {
     assert.equal(alerts[0].direction, 'below');
     assert.equal(alerts[1].active, false);
     assert.equal(alerts[1].triggered_at, '2026-04-26T12:00:00Z');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---- Adapters: createOpenAITools dispatch ----
+test('createOpenAITools returns schemas and execute dispatches resolve_product_query', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url) });
+    return new Response(JSON.stringify({
+      results: [],
+      total: 0,
+      agent_results: [],
+      query_time_ms: 5,
+      cache_hit: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const sdk = createClient('bw_live_test');
+    const { tools, execute } = createOpenAITools(sdk);
+    assert.equal(Array.isArray(tools), true);
+    assert.equal(tools.length, 5);
+    assert.equal(tools[0].function.name, 'resolve_product_query');
+
+    // args as JSON string (the shape OpenAI returns)
+    await execute('resolve_product_query', JSON.stringify({ query: 'wireless headphones', limit: 5 }));
+    assert.ok(calls.some(c => c.url.includes('/v2/agents/search')), 'expected agents search URL');
+
+    // dispatch unknown tool -> throws
+    await assert.rejects(() => execute('nope', '{}'));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('createVercelAITools exposes 5 executable tools', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    results: [], total: 0, agent_results: [], query_time_ms: 1, cache_hit: false,
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    const sdk = createClient('bw_live_test');
+    const tools = createVercelAITools(sdk);
+    const names = Object.keys(tools);
+    assert.equal(names.length, 5);
+    assert.equal(typeof tools.resolve_product_query.execute, 'function');
+    assert.ok(tools.resolve_product_query.parameters.properties.query, 'query param present');
+    const res = await tools.resolve_product_query.execute({ query: 'mechanical keyboard' });
+    assert.equal(typeof res, 'object');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+// ---- Adapters: createAnthropicTools ----
+test('createAnthropicTools returns 5 tools in Anthropic shape with input_schema', () => {
+  const sdk = createClient('bw_live_test');
+  const tools = createAnthropicTools(sdk);
+  assert.equal(tools.length, 5);
+  for (const t of tools) {
+    assert.ok(typeof t.name === 'string');
+    assert.ok(typeof t.description === 'string');
+    assert.ok(typeof t.input_schema === 'object');
+  }
+  assert.ok(tools.some(t => t.name === 'resolve_product_query'));
+});
+
+test('executeAnthropicToolUse dispatches resolve_product_query to agents search', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url) => {
+    calls.push({ url: String(url) });
+    return new Response(JSON.stringify({
+      results: [], total: 0, agent_results: [], query_time_ms: 1, cache_hit: false,
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const sdk = createClient('bw_live_test');
+    await executeAnthropicToolUse(sdk, 'resolve_product_query', { query: 'running shoes' });
+    assert.ok(calls.some(c => c.url.includes('/v2/agents/search')), 'expected agents search URL');
   } finally {
     globalThis.fetch = originalFetch;
   }
