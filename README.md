@@ -138,6 +138,89 @@ const { createClient } = require('@buywhere/sdk');
 
 Sign up free at <https://buywhere.ai/api-keys> — 60 seconds, no credit card.
 
+
+## AI framework integrations
+
+The SDK ships plug-and-play adapters for OpenAI, Vercel AI SDK, and Anthropic. No hand-wiring required.
+
+### OpenAI (Chat Completions / Responses API)
+
+```ts
+import { createClient, createOpenAITools } from '@buywhere/sdk';
+import OpenAI from 'openai';
+
+const sdk = createClient('bw_live_your_api_key');
+const openai = new OpenAI();
+const { tools, execute } = createOpenAITools(sdk);
+
+const res = await openai.chat.completions.create({
+  model: 'gpt-4o',
+  tools,
+  messages: [{ role: 'user', content: 'Find the best price for wireless headphones' }],
+});
+
+for (const call of res.choices[0]?.message?.tool_calls ?? []) {
+  const result = await execute(call.function.name, call.function.arguments);
+  console.log(result);
+}
+```
+
+### Vercel AI SDK (`generateText` / `streamText`)
+
+```ts
+import { generateText } from 'ai';
+import { openai } from '@ai-sdk/openai';
+import { createClient, createVercelAITools } from '@buywhere/sdk';
+
+const sdk = createClient('bw_live_your_api_key');
+const tools = createVercelAITools(sdk);
+
+const { text } = await generateText({
+  model: openai('gpt-4o'),
+  tools,
+  prompt: 'Compare prices for mechanical keyboards',
+});
+```
+
+### Anthropic (Claude Messages API)
+
+```ts
+import Anthropic from '@anthropic-ai/sdk';
+import { createClient, createAnthropicTools, executeAnthropicToolUse } from '@buywhere/sdk';
+
+const sdk = createClient('bw_live_your_api_key');
+const anthropic = new Anthropic();
+const tools = createAnthropicTools(sdk);
+
+const message = await anthropic.messages.create({
+  model: 'claude-sonnet-4-5',
+  tools,
+  messages: [{ role: 'user', content: 'Find deals on running shoes' }],
+});
+
+for (const block of message.content) {
+  if (block.type === 'tool_use') {
+    const result = await executeAnthropicToolUse(sdk, block.name, block.input);
+    console.log(result);
+  }
+}
+```
+
+### Low-level dispatch
+
+All three adapters call `dispatchToolCall` under the hood. Use it directly for custom integrations:
+
+```ts
+import { createClient, dispatchToolCall } from '@buywhere/sdk';
+
+const sdk = createClient('bw_live_your_api_key');
+const result = await dispatchToolCall(sdk, 'resolve_product_query', {
+  query: 'wireless headphones',
+  limit: 5,
+  country: 'US',
+});
+```
+
 ## Development
 
 ```bash
