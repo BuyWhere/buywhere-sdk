@@ -14,6 +14,7 @@ import type {
   GetProductReviewsParams,
   PriceHistoryOptions,
   PriceHistoryResponse,
+  Product,
   ProductDetail,
   ProductId,
   RequestOptions,
@@ -22,6 +23,7 @@ import type {
   RotateApiKeyResponse,
   SearchParams,
   SearchResponse,
+  SearchResponseMeta,
   Webhook,
   WebhookCreateResponse,
   WebhookListResponse,
@@ -246,21 +248,63 @@ export class BuyWhereClient {
       query.set('platform', searchParams.platform);
     }
 
-    return this.request<SearchResponse>(`/v1/search?${query.toString()}`);
+    return this.normalizeSearchResponse(
+      await this.request<SearchResponse>(`/v1/search?${query.toString()}`)
+    );
+  }
+
+  /**
+   * BUY-70604: the API returns search-shaped payloads as `{ data, meta }`,
+   * but the SDK types (and every documented example) use `.results`/`.total`.
+   * Without this normalization `.results` is `undefined` at runtime and
+   * `getProduct()` silently returns `null` for products that exist.
+   *
+   * Populates `results`/`total`/`page` from the envelope while preserving
+   * `data` and `meta` so both access styles work.
+   */
+  private normalizeSearchResponse<T extends SearchResponse>(response: T): T {
+    if (!response || typeof response !== 'object') return response;
+
+    const raw = response as unknown as {
+      results?: Product[];
+      data?: Product[];
+      meta?: SearchResponseMeta;
+      total?: number;
+      page?: { limit: number; offset: number };
+      response_time_ms?: number;
+      cached?: boolean;
+    };
+
+    // Prefer whichever list the API actually sent; keep both in sync.
+    const items = raw.results ?? raw.data ?? [];
+    raw.results = items;
+    raw.data = items;
+
+    const meta = raw.meta ?? {};
+    raw.total = raw.total ?? meta.total ?? items.length;
+    raw.page = raw.page ?? { limit: meta.limit ?? items.length, offset: meta.offset ?? 0 };
+    raw.response_time_ms = raw.response_time_ms ?? meta.response_time_ms ?? 0;
+    raw.cached = raw.cached ?? meta.cached ?? false;
+
+    return response;
   }
 
   async compare(params: ProductId[]): Promise<CompareResponse>;
   async compare(params: string | CompareParams): Promise<CompareResponse>;
   async compare(params: ProductId[] | string | CompareParams): Promise<CompareResponse> {
     if (Array.isArray(params)) {
-      return this.post<CompareResponse>('/v1/products/compare', {
-        product_ids: params,
-      });
+      return this.normalizeSearchResponse(
+        await this.post<CompareResponse>('/v1/products/compare', {
+          product_ids: params,
+        })
+      );
     }
 
     if (typeof params === 'string') {
       const categorySlug = params;
-      return this.request<CompareResponse>(`/v1/compare/${categorySlug}`);
+      return this.normalizeSearchResponse(
+        await this.request<CompareResponse>(`/v1/compare/${categorySlug}`)
+      );
     }
 
     if (params.category) {
@@ -269,12 +313,14 @@ export class BuyWhereClient {
       if (params.country) query.set('country', params.country);
       const queryStr = query.toString();
       const path = `/v1/compare/${params.category}${queryStr ? `?${queryStr}` : ''}`;
-      return this.request<CompareResponse>(path);
+      return this.normalizeSearchResponse(await this.request<CompareResponse>(path));
     }
 
-    return this.post<CompareResponse>('/v1/products/compare', {
-      product_ids: params.product_ids,
-    });
+    return this.normalizeSearchResponse(
+      await this.post<CompareResponse>('/v1/products/compare', {
+        product_ids: params.product_ids,
+      })
+    );
   }
 
   async deals(params?: DealsParams): Promise<DealsResponse> {
@@ -298,16 +344,22 @@ export class BuyWhereClient {
       query.set('offset', String(params.offset));
     }
 
-    return this.request<DealsResponse>(`/v1/deals?${query.toString()}`);
+    return this.normalizeSearchResponse(
+      await this.request<DealsResponse>(`/v1/deals?${query.toString()}`)
+    );
   }
 
   async getProduct(productId: number): Promise<ProductDetail> {
-    const response = await this.request<SearchResponse>(`/v1/products/${productId}`);
+    const response = this.normalizeSearchResponse(
+      await this.request<SearchResponse>(`/v1/products/${productId}`)
+    );
     return response.results?.[0] ?? null as unknown as ProductDetail;
   }
 
   async getProductByParams(params: GetProductParams): Promise<ProductDetail> {
-    const response = await this.request<SearchResponse>(`/v1/products/${params.product_id}`);
+    const response = this.normalizeSearchResponse(
+      await this.request<SearchResponse>(`/v1/products/${params.product_id}`)
+    );
     return response.results?.[0] ?? null as unknown as ProductDetail;
   }
 
@@ -369,7 +421,9 @@ export class BuyWhereClient {
       query.set('min_discount_pct', String(params.min_discount_pct));
     }
 
-    return this.request<DealsFeedResponse>(`/v1/deals/feed?${query.toString()}`);
+    return this.normalizeSearchResponse(
+      await this.request<DealsFeedResponse>(`/v1/deals/feed?${query.toString()}`)
+    );
   }
 
   async getProductReviewsSummary(params: GetProductReviewsParams): Promise<ReviewSummary> {
@@ -421,6 +475,7 @@ export class BuyWhereClient {
         errors.push({ index, error });
         results.push({
           results: [],
+          data: [],
           total: 0,
           page: { limit: 0, offset: 0 },
           response_time_ms: 0,

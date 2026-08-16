@@ -341,3 +341,97 @@ test('executeAnthropicToolUse dispatches resolve_product_query to agents search'
     globalThis.fetch = originalFetch;
   }
 });
+
+// BUY-70604: the API returns search-shaped payloads as `{ data, meta }`.
+// Before the fix, `.results` was `undefined` and `getProduct()` returned
+// `null` for products that exist. Envelope captured from live prod
+// GET /v1/products/search?q=laptop&country=SG on 2026-08-16.
+const PROD_SEARCH_ENVELOPE = {
+  data: [
+    {
+      id: '54614597',
+      title: '[Laptop] Microsoft Surface Laptop 13-inch',
+      price: { amount: 1348.9, currency: 'SGD' },
+      merchant: 'shopee',
+      url: 'https://shopee.sg/i.142031781.8754682274',
+      image_url: null,
+      region: 'SG',
+      country_code: 'SG',
+      updated_at: '2026-08-16T00:00:00Z',
+      availability: { in_stock: true, status: 'in_stock' },
+    },
+  ],
+  meta: { total: 3, limit: 2, offset: 0, response_time_ms: 147, cached: false, has_more: true },
+};
+
+function stubFetch(payload) {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  return () => { globalThis.fetch = originalFetch; };
+}
+
+test('BUY-70604: search() normalizes the {data,meta} envelope to .results', async () => {
+  const restore = stubFetch(PROD_SEARCH_ENVELOPE);
+  try {
+    const res = await createClient('bw_live_test').search.search({ query: 'laptop', country: 'SG' });
+
+    assert.ok(Array.isArray(res.results), '.results must be an array, not undefined');
+    assert.equal(res.results.length, 1);
+    assert.equal(res.results[0].id, '54614597');
+
+    // `data` stays available and identical for callers using the raw field.
+    assert.deepEqual(res.data, res.results);
+
+    // Scalars are lifted out of `meta`.
+    assert.equal(res.total, 3);
+    assert.deepEqual(res.page, { limit: 2, offset: 0 });
+    assert.equal(res.cached, false);
+    assert.equal(res.meta.has_more, true);
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70604: availability/in_stock survives normalization', async () => {
+  const restore = stubFetch(PROD_SEARCH_ENVELOPE);
+  try {
+    const res = await createClient('bw_live_test').search.search('laptop');
+    assert.deepEqual(res.results[0].availability, { in_stock: true, status: 'in_stock' });
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70604: getProduct() returns the product instead of null', async () => {
+  const restore = stubFetch(PROD_SEARCH_ENVELOPE);
+  try {
+    const product = await createClient('bw_live_test').products.getProduct(54614597);
+    assert.notEqual(product, null, 'getProduct() must not return null when the API returned a product');
+    assert.equal(product.id, '54614597');
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70604: legacy {results,total} payloads still work', async () => {
+  const restore = stubFetch({
+    results: [{ id: '1', title: 'Legacy' }],
+    total: 1,
+    page: { limit: 10, offset: 0 },
+    response_time_ms: 5,
+    cached: true,
+  });
+  try {
+    const res = await createClient('bw_live_test').search.search('laptop');
+    assert.equal(res.results.length, 1);
+    assert.deepEqual(res.data, res.results);
+    assert.equal(res.total, 1);
+    assert.equal(res.cached, true);
+  } finally {
+    restore();
+  }
+});

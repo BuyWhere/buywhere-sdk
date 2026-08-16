@@ -3,6 +3,16 @@ export interface ProductPrice {
   currency: string;
 }
 
+/**
+ * Stock/availability label returned by the API.
+ * BUY-70574 added `availability` to search payloads; BUY-70592 made it
+ * a ranking input. Optional because older cached payloads may omit it.
+ */
+export interface ProductAvailability {
+  in_stock: boolean;
+  status: 'in_stock' | 'low_stock' | 'out_of_stock' | 'preorder' | 'unknown';
+}
+
 export interface Product {
   id: string;
   title: string;
@@ -13,6 +23,7 @@ export interface Product {
   region: string | null;
   country_code: string | null;
   updated_at: string | null;
+  availability?: ProductAvailability;
   metadata?: Record<string, unknown> | null;
   canonical_id?: string;
   normalized_price_usd?: number | null;
@@ -40,12 +51,27 @@ export interface SearchParams {
   platform?: string;
 }
 
+export interface SearchResponseMeta {
+  total?: number;
+  limit?: number;
+  offset?: number;
+  response_time_ms?: number;
+  cached?: boolean;
+  has_more?: boolean;
+  hint?: string;
+}
+
 export interface SearchResponse {
+  /** Products. Normalized from the API's `data` envelope. */
   results: Product[];
+  /** Alias of `results` — matches the raw API `data` field. */
+  data: Product[];
   total: number;
   page: { limit: number; offset: number };
   response_time_ms: number;
   cached: boolean;
+  /** Raw `meta` envelope from the API, when present. */
+  meta?: SearchResponseMeta;
 }
 
 export interface MerchantPrice {
