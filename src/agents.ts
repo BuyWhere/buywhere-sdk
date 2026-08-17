@@ -72,16 +72,24 @@ export class AgentsClient {
     ftsQuery.set('mode', 'fts');
 
     const semanticUrl = `/v2/agents/search?${query.toString()}`;
-    const ftsUrl = `/v1/search?${ftsQuery.toString()}`;
+    // BUY-70915: /v1/search 301-redirects to /v1/products/search on prod.
+    // Call the canonical route directly to avoid a wasted round-trip.
+    const ftsUrl = `/v1/products/search?${ftsQuery.toString()}`;
 
     try {
-      return await circuitBreaker.execute(() =>
-        this.client.request<AgentSearchResponse>(semanticUrl)
+      return await circuitBreaker.execute(async () =>
+        // BUY-70915: normalize the {data,meta} envelope. Without this,
+        // `.results` is undefined on every agents.search() call.
+        this.client.normalizeSearchResponse(
+          await this.client.request<AgentSearchResponse>(semanticUrl)
+        )
       );
     } catch (error) {
       if (error instanceof CircuitBreakerError) {
         console.log(`[CircuitBreaker] State=${circuitBreaker.getState()} — falling back to FTS search`);
-        const response = await this.client.request<AgentSearchResponse>(ftsUrl);
+        const response = this.client.normalizeSearchResponse(
+          await this.client.request<AgentSearchResponse>(ftsUrl)
+        );
         Object.defineProperty(response, '_searchMode', {
           value: 'fallback',
           writable: false,
