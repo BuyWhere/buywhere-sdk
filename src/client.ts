@@ -3,6 +3,7 @@ import type {
   ClientConfig,
   CompareParams,
   CompareResponse,
+  Country,
   DealsParams,
   DealsResponse,
   BatchSearchParams,
@@ -17,6 +18,7 @@ import type {
   Product,
   ProductDetail,
   ProductId,
+  Region,
   RequestOptions,
   RetryConfig,
   ReviewSummary,
@@ -26,7 +28,6 @@ import type {
   SearchResponseMeta,
   Webhook,
   WebhookCreateResponse,
-  WebhookListResponse,
   GetProductAlertsParams,
   ProductAlert,
 } from './types';
@@ -292,45 +293,51 @@ export class BuyWhereClient {
   async compare(params: ProductId[]): Promise<CompareResponse>;
   async compare(params: string | CompareParams): Promise<CompareResponse>;
   async compare(params: ProductId[] | string | CompareParams): Promise<CompareResponse> {
-    if (Array.isArray(params)) {
+    // The API exposes compare as GET /v1/products/compare?ids=a,b (NOT a POST body),
+    // and category browsing as GET /v1/categories/{slug} (there is no /v1/compare/*).
+    const compareByIds = async (ids: ProductId[]): Promise<CompareResponse> => {
+      const query = new URLSearchParams();
+      query.set('ids', ids.join(','));
       return this.normalizeSearchResponse(
-        await this.post<CompareResponse>('/v1/products/compare', {
-          product_ids: params,
-        })
+        await this.request<CompareResponse>(`/v1/products/compare?${query.toString()}`)
       );
+    };
+
+    const compareByCategory = async (
+      slug: string,
+      opts: { region?: Region; country?: Country } = {}
+    ): Promise<CompareResponse> => {
+      const query = new URLSearchParams();
+      if (opts.region) query.set('region', opts.region);
+      if (opts.country) query.set('country_code', opts.country);
+      const queryStr = query.toString();
+      const path = `/v1/categories/${encodeURIComponent(slug)}${queryStr ? `?${queryStr}` : ''}`;
+      return this.normalizeSearchResponse(await this.request<CompareResponse>(path));
+    };
+
+    if (Array.isArray(params)) {
+      return compareByIds(params);
     }
 
     if (typeof params === 'string') {
-      const categorySlug = params;
-      return this.normalizeSearchResponse(
-        await this.request<CompareResponse>(`/v1/compare/${categorySlug}`)
-      );
+      return compareByCategory(params);
     }
 
     if (params.category) {
-      const query = new URLSearchParams();
-      if (params.region) query.set('region', params.region);
-      if (params.country) query.set('country', params.country);
-      const queryStr = query.toString();
-      const path = `/v1/compare/${params.category}${queryStr ? `?${queryStr}` : ''}`;
-      return this.normalizeSearchResponse(await this.request<CompareResponse>(path));
+      return compareByCategory(params.category, {
+        region: params.region,
+        country: params.country,
+      });
     }
 
-    return this.normalizeSearchResponse(
-      await this.post<CompareResponse>('/v1/products/compare', {
-        product_ids: params.product_ids,
-      })
-    );
+    return compareByIds(params.product_ids);
   }
 
   async deals(params?: DealsParams): Promise<DealsResponse> {
     const query = new URLSearchParams();
 
-    if (params?.country) {
-      query.set('country', params.country);
-    } else {
-      query.set('country', this.defaultCountry);
-    }
+    // API spec parameter is `country_code`, not `country`.
+    query.set('country_code', params?.country ?? this.defaultCountry);
 
     if (params?.category) {
       query.set('category', params.category);
@@ -345,7 +352,7 @@ export class BuyWhereClient {
     }
 
     return this.normalizeSearchResponse(
-      await this.request<DealsResponse>(`/v1/deals?${query.toString()}`)
+      await this.request<DealsResponse>(`/v1/products/deals?${query.toString()}`)
     );
   }
 
@@ -399,11 +406,8 @@ export class BuyWhereClient {
   async getDealsFeed(params?: DealsFeedParams): Promise<DealsFeedResponse> {
     const query = new URLSearchParams();
 
-    if (params?.country) {
-      query.set('country', params.country);
-    } else {
-      query.set('country', this.defaultCountry);
-    }
+    // API spec parameter is `country_code`, not `country`.
+    query.set('country_code', params?.country ?? this.defaultCountry);
 
     if (params?.category) {
       query.set('category', params.category);
@@ -417,36 +421,22 @@ export class BuyWhereClient {
       query.set('offset', String(params.offset));
     }
 
+    // API spec parameter is `min_discount`, not `min_discount_pct`.
     if (params?.min_discount_pct) {
-      query.set('min_discount_pct', String(params.min_discount_pct));
+      query.set('min_discount', String(params.min_discount_pct));
     }
 
     return this.normalizeSearchResponse(
-      await this.request<DealsFeedResponse>(`/v1/deals/feed?${query.toString()}`)
+      await this.request<DealsFeedResponse>(`/v1/products/deals?${query.toString()}`)
     );
   }
 
-  async getProductReviewsSummary(params: GetProductReviewsParams): Promise<ReviewSummary> {
-    const query = new URLSearchParams();
-    query.set('product_id', String(params.product_id));
-
-    if (params.country) {
-      query.set('country', params.country);
-    }
-
-    return this.request<ReviewSummary>(`/v1/products/${params.product_id}/reviews/summary?${query.toString()}`);
+  async getProductReviewsSummary(_params: GetProductReviewsParams): Promise<ReviewSummary> {
+    throw unsupportedEndpoint('getProductReviewsSummary', 'product review summaries');
   }
 
-  async getProductAlerts(params: GetProductAlertsParams): Promise<ProductAlert[]> {
-    const query = new URLSearchParams();
-    if (params.country) {
-      query.set('country', params.country);
-    }
-
-    const queryStr = query.toString();
-    const path = `/v1/products/${params.product_id}/alerts${queryStr ? `?${queryStr}` : ''}`;
-    const response = await this.request<{ alerts: ProductAlert[] }>(path);
-    return response.alerts ?? [];
+  async getProductAlerts(_params: GetProductAlertsParams): Promise<ProductAlert[]> {
+    throw unsupportedEndpoint('getProductAlerts', 'product price alerts');
   }
 
   async batchSearch(params: BatchSearchParams): Promise<BatchSearchResult> {
@@ -541,17 +531,16 @@ export class BuyWhereClient {
     };
   }
 
-  async createWebhook(url: string, events: string[]): Promise<WebhookCreateResponse> {
-    return this.post<WebhookCreateResponse>('/v1/webhooks', { url, events });
+  async createWebhook(_url: string, _events: string[]): Promise<WebhookCreateResponse> {
+    throw unsupportedEndpoint('createWebhook', 'webhooks');
   }
 
   async listWebhooks(): Promise<Webhook[]> {
-    const response = await this.request<WebhookListResponse>('/v1/webhooks');
-    return response.webhooks;
+    throw unsupportedEndpoint('listWebhooks', 'webhooks');
   }
 
-  async deleteWebhook(id: string): Promise<void> {
-    await this.delete<void>(`/v1/webhooks/${id}`);
+  async deleteWebhook(_id: string): Promise<void> {
+    throw unsupportedEndpoint('deleteWebhook', 'webhooks');
   }
 }
 
@@ -575,6 +564,22 @@ export class BuyWhereError extends Error {
 
 export { BuyWhereClient as Client };
 export type { SearchParams, CompareParams, DealsParams } from './types';
+
+/**
+ * Some SDK surface was written against endpoints the production API never shipped.
+ * Rather than emitting an opaque HTTP 404, fail fast with an actionable error so
+ * developers immediately know the capability is absent, not merely misconfigured.
+ */
+function unsupportedEndpoint(method: string, capability: string): BuyWhereError {
+  return new BuyWhereError(
+    `${method}() is not supported: the BuyWhere API does not currently expose ${capability}. ` +
+      `Track support at https://github.com/BuyWhere/buywhere-sdk/issues and see ` +
+      `https://api.buywhere.ai/docs for the list of available endpoints.`,
+    501,
+    undefined,
+    'endpoint_not_supported'
+  );
+}
 
 function parseJson(value: string): unknown {
   if (!value) {

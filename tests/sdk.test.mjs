@@ -27,11 +27,13 @@ test('SDK compare is callable and posts product ids', async () => {
     assert.equal(typeof client.compare, 'function');
 
     await client.compare(['sku_123', 'sku_456']);
-    assert.equal(calls[0].url, 'https://api.buywhere.ai/v1/products/compare');
-    assert.equal(calls[0].init.method, 'POST');
-    assert.deepEqual(JSON.parse(calls[0].init.body), {
-      product_ids: ['sku_123', 'sku_456'],
-    });
+    // BUY-70872: the API exposes compare as GET ?ids=, not a POST body.
+    // POST /v1/products/compare returns 404 on production.
+    assert.equal(
+      calls[0].url,
+      'https://api.buywhere.ai/v1/products/compare?ids=sku_123%2Csku_456'
+    );
+    assert.notEqual(calls[0].init.method, 'POST');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -148,110 +150,38 @@ test('BuyWhereError exposes errorCode and requestId', async () => {
   }
 });
 
-test('webhooks client can create, list, and delete', async () => {
+test('BUY-70872: webhooks facade rejects — API exposes no /v1/webhooks route', async () => {
   const originalFetch = globalThis.fetch;
-  const calls = [];
-
-  globalThis.fetch = async (url, init = {}) => {
-    calls.push({ url: String(url), method: init.method ?? 'GET' });
-
-    if ((init.method ?? 'GET') === 'POST') {
-      return new Response(JSON.stringify({
-        id: 'wh_123',
-        url: 'https://example.com/webhook',
-        product_ids: [],
-        events: ['price_drop'],
-        active: true,
-        created_at: '2026-04-26T00:00:00Z',
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-
-    if ((init.method ?? 'GET') === 'DELETE') {
-      return new Response(null, { status: 204 });
-    }
-
-    return new Response(JSON.stringify({
-      total: 1,
-      webhooks: [{
-        id: 'wh_123',
-        url: 'https://example.com/webhook',
-        product_ids: [],
-        events: ['price_drop'],
-        active: true,
-        created_at: '2026-04-26T00:00:00Z',
-      }],
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  };
+  let networkCalls = 0;
+  globalThis.fetch = async () => { networkCalls++; return new Response('{}', { status: 200 }); };
 
   try {
     const client = createClient('bw_live_test');
-    const created = await client.webhooks.create('https://example.com/webhook', ['price_drop']);
-    const listed = await client.webhooks.list();
-    await client.webhooks.delete(created.id);
-
-    assert.equal(created.id, 'wh_123');
-    assert.equal(listed.length, 1);
-    assert.deepEqual(calls.map((call) => `${call.method} ${call.url}`), [
-      'POST https://api.buywhere.ai/v1/webhooks',
-      'GET https://api.buywhere.ai/v1/webhooks',
-      'DELETE https://api.buywhere.ai/v1/webhooks/wh_123',
-    ]);
+    await assert.rejects(() => client.webhooks.create('https://example.com/webhook', ['price_drop']));
+    await assert.rejects(() => client.webhooks.list());
+    await assert.rejects(() => client.webhooks.delete('wh_123'));
+    assert.equal(networkCalls, 0, 'must not issue HTTP requests for unsupported endpoints');
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('products client can get alerts for a product', async () => {
+test('BUY-70872: products.getAlerts rejects — API exposes no /alerts route', async () => {
   const originalFetch = globalThis.fetch;
-  const calls = [];
-
-  globalThis.fetch = async (url, init = {}) => {
-    calls.push({ url: String(url), init });
-    return new Response(JSON.stringify({
-      alerts: [
-        {
-          id: 'alert_abc',
-          product_id: 123,
-          target_price: 49.99,
-          direction: 'below',
-          callback_url: 'https://example.com/webhook',
-          active: true,
-          created_at: '2026-04-26T00:00:00Z',
-        },
-        {
-          id: 'alert_def',
-          product_id: 123,
-          target_price: 59.99,
-          direction: 'above',
-          callback_url: 'https://example.com/webhook2',
-          active: false,
-          created_at: '2026-04-25T00:00:00Z',
-          triggered_at: '2026-04-26T12:00:00Z',
-        },
-      ],
-    }), {
-      status: 200,
-      headers: { 'content-type': 'application/json' },
-    });
-  };
+  let networkCalls = 0;
+  globalThis.fetch = async () => { networkCalls++; return new Response('{}', { status: 200 }); };
 
   try {
     const client = createClient('bw_live_test');
-    const alerts = await client.products.getAlerts({ product_id: 123 });
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].url, 'https://api.buywhere.ai/v1/products/123/alerts');
-    assert.equal(alerts.length, 2);
-    assert.equal(alerts[0].id, 'alert_abc');
-    assert.equal(alerts[0].target_price, 49.99);
-    assert.equal(alerts[0].direction, 'below');
-    assert.equal(alerts[1].active, false);
-    assert.equal(alerts[1].triggered_at, '2026-04-26T12:00:00Z');
+    await assert.rejects(
+      () => client.products.getAlerts({ product_id: 123 }),
+      (err) => {
+        assert.ok(err instanceof BuyWhereError);
+        assert.equal(err.errorCode, 'endpoint_not_supported');
+        return true;
+      },
+    );
+    assert.equal(networkCalls, 0, 'must not issue HTTP requests for unsupported endpoints');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -431,6 +361,115 @@ test('BUY-70604: legacy {results,total} payloads still work', async () => {
     assert.deepEqual(res.data, res.results);
     assert.equal(res.total, 1);
     assert.equal(res.cached, true);
+  } finally {
+    restore();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// BUY-70872 — phantom route regressions.
+// Every path below was verified against production on 2026-08-17: the paths the
+// SDK used to call returned 404 while the corrected paths returned 429
+// (rate-limited but routed). 404-vs-429 is a valid discriminator because routing
+// happens before rate limiting — bogus control paths returned 404.
+// ---------------------------------------------------------------------------
+
+function captureFetch(payload = { products: [], meta: {} }) {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init = {}) => {
+    calls.push({ url: String(url), init });
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+  return { calls, restore: () => { globalThis.fetch = original; } };
+}
+
+test('BUY-70872: deals() hits /v1/products/deals, never phantom /v1/deals', async () => {
+  const { calls, restore } = captureFetch();
+  try {
+    await createClient('bw_live_test').deals.getDeals({ country: 'SG', limit: 5 });
+    const url = new URL(calls[0].url);
+    assert.equal(url.pathname, '/v1/products/deals');
+    // Guard the exact phantom path that 404'd in production.
+    assert.ok(!/\/v1\/deals(\?|$)/.test(calls[0].url), 'must not call /v1/deals');
+    // Spec parameter is country_code, not country.
+    assert.equal(url.searchParams.get('country_code'), 'SG');
+    assert.equal(url.searchParams.get('country'), null);
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70872: getDealsFeed() maps min_discount_pct -> min_discount on the real path', async () => {
+  const { calls, restore } = captureFetch();
+  try {
+    await createClient('bw_live_test').deals.getDealsFeed({ country: 'MY', min_discount_pct: 30 });
+    const url = new URL(calls[0].url);
+    assert.equal(url.pathname, '/v1/products/deals');
+    assert.ok(!calls[0].url.includes('/v1/deals/feed'), 'must not call /v1/deals/feed');
+    assert.equal(url.searchParams.get('min_discount'), '30');
+    assert.equal(url.searchParams.get('min_discount_pct'), null);
+    assert.equal(url.searchParams.get('country_code'), 'MY');
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70872: compare(ids) uses GET ?ids= rather than a POST body', async () => {
+  const { calls, restore } = captureFetch();
+  try {
+    await createClient('bw_live_test').compare.compareProducts(['sku_1', 'sku_2']);
+    const url = new URL(calls[0].url);
+    assert.equal(url.pathname, '/v1/products/compare');
+    assert.equal(url.searchParams.get('ids'), 'sku_1,sku_2');
+    assert.notEqual(calls[0].init.method, 'POST');
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70872: compare(category) resolves to /v1/categories/{slug}', async () => {
+  const { calls, restore } = captureFetch();
+  try {
+    await createClient('bw_live_test').compare.compareByCategory('laptops');
+    const url = new URL(calls[0].url);
+    assert.equal(url.pathname, '/v1/categories/laptops');
+    assert.ok(!calls[0].url.includes('/v1/compare/'), 'must not call phantom /v1/compare/*');
+  } finally {
+    restore();
+  }
+});
+
+test('BUY-70872: unsupported endpoints fail fast instead of emitting an opaque 404', async () => {
+  const { calls, restore } = captureFetch();
+  try {
+    const client = createClient('bw_live_test');
+    const cases = [
+      ['getReviewsSummary', () => client.products.getReviewsSummary({ product_id: 1 })],
+      ['getAlerts', () => client.products.getAlerts({ product_id: 1 })],
+      ['webhooks.list', () => client.webhooks.list()],
+      ['webhooks.create', () => client.webhooks.create('https://x.test', ['price'])],
+      ['webhooks.delete', () => client.webhooks.delete('wh_1')],
+    ];
+
+    for (const [name, invoke] of cases) {
+      await assert.rejects(
+        invoke,
+        (err) => {
+          assert.ok(err instanceof BuyWhereError, `${name} should throw BuyWhereError`);
+          assert.equal(err.errorCode, 'endpoint_not_supported', `${name} errorCode`);
+          assert.equal(err.statusCode, 501, `${name} statusCode`);
+          return true;
+        },
+        `${name} must reject`
+      );
+    }
+
+    // Critically: no network call should be attempted for unsupported endpoints.
+    assert.equal(calls.length, 0, 'unsupported endpoints must not issue HTTP requests');
   } finally {
     restore();
   }
