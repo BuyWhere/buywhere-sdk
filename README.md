@@ -4,7 +4,7 @@
   <a href="https://buywhere.ai/api-keys"><img src="https://img.shields.io/badge/🔑_Get_your_free_API_key-60_seconds-4f46e5?style=for-the-badge" alt="Get your free API key"></a>
 </p>
 
-Official TypeScript/JavaScript SDK for BuyWhere product search, compare, price history, key rotation, and webhooks.
+Official TypeScript/JavaScript SDK for BuyWhere product search, compare, deals, price history, and key rotation.
 
 ## Installation
 
@@ -30,12 +30,7 @@ const history = await client.priceHistory('sku_123', {
   since: '2026-01-01T00:00:00Z',
 });
 
-const webhook = await client.webhooks.create(
-  'https://example.com/webhooks/buywhere',
-  ['price_drop', 'product_update'],
-);
-
-console.log(results.items.length, comparison.products.length, history.price_history.length, webhook.id);
+console.log(results.items.length, comparison.products.length, history.price_history.length);
 ```
 
 ## Configuration
@@ -65,7 +60,6 @@ import type {
   CompareResponse,
   PriceHistoryResponse,
   RotateApiKeyResponse,
-  Webhook,
 } from '@buywhere/sdk';
 
 const client = createClient('bw_live_your_api_key');
@@ -78,15 +72,15 @@ const historyResult: PriceHistoryResponse = await client.priceHistory('sku_123',
 });
 
 const rotation: RotateApiKeyResponse = await client.rotateApiKey();
-
-const createdWebhook = await client.webhooks.create(
-  'https://example.com/webhooks/buywhere',
-  ['price_drop'],
-);
-
-const webhooks: Webhook[] = await client.webhooks.list();
-await client.webhooks.delete(createdWebhook.id);
 ```
+
+### Not currently supported
+
+The API does not yet expose webhooks, product price alerts, or review summaries.
+`client.webhooks.*`, `client.products.getAlerts()`, and
+`client.products.getReviewsSummary()` therefore reject immediately with a
+`BuyWhereError` whose `errorCode` is `endpoint_not_supported`, rather than
+issuing a request that would return an opaque HTTP 404.
 
 The existing namespaced helpers still work:
 

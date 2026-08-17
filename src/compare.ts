@@ -32,5 +32,18 @@ export type CompareNamespace = CompareClient & ((productIds: ProductId[]) => Pro
 export function createCompareNamespace(client: BuyWhereClient): CompareNamespace {
   const compareClient = new CompareClient(client);
   const callableCompare = ((productIds: ProductId[]) => compareClient.compareProducts(productIds)) as CompareNamespace;
+
+  // BUY-70872: `Object.assign(fn, instance)` only copies OWN enumerable props.
+  // Class methods live on the prototype, so every sdk.compare.* method silently
+  // came back `undefined`. Bind each prototype method onto the callable instead.
+  const proto = Object.getPrototypeOf(compareClient) as Record<string, unknown>;
+  for (const key of Object.getOwnPropertyNames(proto)) {
+    if (key === 'constructor') continue;
+    const value = (compareClient as unknown as Record<string, unknown>)[key];
+    if (typeof value === 'function') {
+      (callableCompare as unknown as Record<string, unknown>)[key] = (value as (...a: unknown[]) => unknown).bind(compareClient);
+    }
+  }
+
   return Object.assign(callableCompare, compareClient);
 }
