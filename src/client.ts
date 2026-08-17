@@ -262,8 +262,21 @@ export class BuyWhereClient {
    *
    * Populates `results`/`total`/`page` from the envelope while preserving
    * `data` and `meta` so both access styles work.
+   *
+   * BUY-70915: this is public because the sibling namespace clients
+   * (`agents`, `autocomplete`) issue their own requests via `request()` and
+   * must apply the same normalization. When it was `private` they returned the
+   * raw `{ data, meta }` envelope, so `.results` was `undefined` — the exact
+   * bug BUY-70604 fixed for `search()` only.
+   *
+   * The constraint is `object` rather than `SearchResponse` because the
+   * envelope is shared by several differently-typed search-shaped payloads
+   * (`AgentSearchResponse`, autocomplete suggestions, `CompareResponse`). The
+   * body already casts through `unknown`, so a narrower constraint bought no
+   * extra safety while making every non-`SearchResponse` caller fail to
+   * compile.
    */
-  private normalizeSearchResponse<T extends SearchResponse>(response: T): T {
+  normalizeSearchResponse<T extends object>(response: T): T {
     if (!response || typeof response !== 'object') return response;
 
     const raw = response as unknown as {

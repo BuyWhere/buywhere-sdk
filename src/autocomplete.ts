@@ -55,12 +55,19 @@ export class AutocompleteClient {
       params.set('currency', options.currency);
     }
 
-    const response = await this.client.request<{ items: AutocompleteSuggestion[] }>(
-      `/api/v1/search?${params.toString()}`
+    // BUY-70915: there is no autocomplete endpoint on the API, and the old
+    // `/api/v1/search` path 404s on production (no route is mounted under the
+    // `/api` prefix except /api/mcp and /api/v1/compare). Typeahead is served
+    // by the canonical bounded search route, which returns a `{ data, meta }`
+    // envelope — not `{ items }`.
+    const response = this.client.normalizeSearchResponse(
+      await this.client.request<{ results?: AutocompleteSuggestion[] }>(
+        `/v1/products/search?${params.toString()}`
+      )
     );
 
     return {
-      items: response.items || [],
+      items: response.results ?? [],
       query,
     };
   }

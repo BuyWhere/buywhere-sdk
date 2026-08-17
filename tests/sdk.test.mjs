@@ -474,3 +474,84 @@ test('BUY-70872: unsupported endpoints fail fast instead of emitting an opaque 4
     restore();
   }
 });
+
+// ---------------------------------------------------------------------------
+// BUY-70915: agents.search() and autocomplete() bypassed the {data,meta}
+// normalizer added in BUY-70604, and autocomplete pointed at a phantom route.
+// ---------------------------------------------------------------------------
+
+test('BUY-70915: agents.search() normalizes the {data,meta} envelope into .results', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{ id: '1', name: 'Dell XPS 13', price: 1299, currency: 'SGD' }],
+    meta: { total: 1, limit: 20, offset: 0 },
+  }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  try {
+    const sdk = createClient('bw_live_test');
+    const res = await sdk.agents.search('laptop');
+    // The API sends {data,meta}; every documented example reads .results/.total.
+    assert.ok(Array.isArray(res.results), 'results must be an array, not undefined');
+    assert.equal(res.results.length, 1);
+    assert.equal(res.results[0].name, 'Dell XPS 13');
+    assert.equal(res.total, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('BUY-70915: agents.search() FTS fallback also normalizes the envelope', async () => {
+  const originalFetch = globalThis.fetch;
+  const urls = [];
+  globalThis.fetch = async (url) => {
+    urls.push(String(url));
+    // Fail the semantic route until the breaker opens, then serve the envelope.
+    if (String(url).includes('/v2/agents/search')) {
+      return new Response(JSON.stringify({ error: 'boom' }), { status: 500 });
+    }
+    return new Response(JSON.stringify({
+      data: [{ id: '7', name: 'Fallback Laptop', price: 999, currency: 'SGD' }],
+      meta: { total: 1, limit: 20, offset: 0 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const sdk = createClient({
+      apiKey: 'bw_live_test',
+      retry: { maxRetries: 0 },
+      circuitBreaker: { failureThreshold: 1 },
+    });
+    // First call trips the breaker open.
+    await sdk.agents.search('laptop').catch(() => {});
+    const res = await sdk.agents.search('laptop');
+    assert.ok(urls.some((u) => u.includes('mode=fts')), 'should fall back to FTS');
+    assert.ok(Array.isArray(res.results), 'fallback results must be normalized');
+    assert.equal(res.results[0].name, 'Fallback Laptop');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('BUY-70915: autocomplete() calls a real API route, not the phantom /api/v1/search', async () => {
+  const originalFetch = globalThis.fetch;
+  let requestedUrl = '';
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response(JSON.stringify({
+      data: [{ id: '3', name: 'Lapdesk', price: 39, currency: 'SGD' }],
+      meta: { total: 1 },
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  try {
+    const sdk = createClient('bw_live_test');
+    const res = await sdk.autocomplete.autocomplete('lap', { limit: 5 });
+    // /api/v1/search 404s on production — there is no /api-prefixed search route.
+    assert.ok(!requestedUrl.includes('/api/v1/search'), `phantom route used: ${requestedUrl}`);
+    assert.ok(requestedUrl.includes('/v1/products/search'), `expected real search route, got ${requestedUrl}`);
+    assert.equal(res.items.length, 1, 'items must be populated from the {data,meta} envelope');
+    assert.equal(res.items[0].name, 'Lapdesk');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
